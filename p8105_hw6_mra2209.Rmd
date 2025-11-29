@@ -1,0 +1,118 @@
+---
+title: 'P8105 HW6'
+author: "Maya Arnott"
+date: "2025-11-29"
+output: github_document
+---
+
+```{r, include = FALSE, message = FALSE, warning = FALSE}
+library(tidyverse)
+library(broom)
+library(dplyr)
+
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  fig.width = 6,
+  fig.asp = .6,
+  out.width = "90%"
+  )
+
+theme_set(theme_minimal() + theme(legend.position = "bottom"))
+
+options(
+  ggplot2.continuous.colour = "viridis",
+  ggplot2.continuous.fill = "viridis"
+)
+
+scale_colour_discrete = scale_colour_viridis_d
+scale_fill_discrete = scale_fill_viridis_d
+```
+
+# Problem 1
+
+First, I'll load and tidy the homicide data.
+```{r}
+homicide_df = 
+  read_csv("./data/homicide-data.csv") |> 
+  janitor::clean_names()
+```
+
+Creating a `city_state` variable and binary variable for homicide solved/unsolved.
+```{r}
+homicide_df = homicide_df |> 
+  mutate(
+    # creating a city, state var
+    city_state = paste(city, state, sep = ", "),
+    # creating a binary case_solved var
+    # 1 = case solved and 0 = case not solved/anything else
+    case_solved = ifelse(grepl("^Closed by arrest", disposition), 1, 0),
+    # converting age var to numeric
+    victim_age = as.numeric(victim_age),
+    # converting victim's sex and race to factor vars
+    victim_sex = as.factor(victim_sex),
+    victim_race = as.factor(victim_race)
+  ) |>
+  # using only data when race = white or black 
+  filter (
+    victim_race %in% c("White", "Black")
+  ) 
+
+homicide_df = homicide_df |> 
+  select(-city, -state) |> 
+  filter(
+    !city_state %in% c("Phoenix, AZ", "Kansas City, MO", "Dallas, TX", "Tulsa, AL")
+  )
+```
+
+I will make a `glm` function.
+
+```{r}
+baltimore_df = homicide_df |> 
+  filter(city_state == "Baltimore, MD")
+
+balt_glm = 
+  glm(case_solved ~ victim_age + victim_sex + victim_race, 
+      data = baltimore_df,
+      family = binomial(link = "logit")
+      )
+summary(balt_glm)
+```
+
+I will tidy my glm function.
+
+```{r}
+tidy_glm = 
+  broom::tidy(balt_glm, conf.int = TRUE, exponentiate = TRUE)
+
+tidy_glm |> 
+  filter(term == "victim_sexMale") |> 
+  select(term, estimate, conf.low, conf.high)
+
+```
+
+According to this logistic regression model, this means that the odds of solving homicides with male victims has 0.426 times the odds of solving homicides with female victims when all other predictors are held constant. This odds ratio has a confidence interval of 0.324 to 0.558.
+
+Now, I will run `glm` for all the cities and extract their adjusted odds ratios.
+
+```{r}
+city_results = homicide_df |> 
+  group_by(city_state) |> 
+  # nest data for purrr
+  nest() |> 
+  mutate(
+    glm_model = map(data, ~ glm(
+      case_solved ~ victim_age + victim_sex + victim_race,
+      data = .x,
+      family = binomial(link = "logit")
+      )),
+    tidy_glm = map(glm_model, ~tidy(.x, conf.int = TRUE, exponenitate = TRUE))
+  ) |> 
+  select(city_state, tidy_glm) |> 
+  # expand the results by unnesting
+  unnest(tidy_glm)
+  
+  
+```
+
+
