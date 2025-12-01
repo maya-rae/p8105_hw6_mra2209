@@ -9,6 +9,7 @@ output: github_document
 library(tidyverse)
 library(broom)
 library(dplyr)
+library(forcats)
 
 knitr::opts_chunk$set(
   echo = TRUE,
@@ -91,7 +92,8 @@ tidy_glm |>
 
 ```
 
-According to this logistic regression model, this means that the odds of solving homicides with male victims has 0.426 times the odds of solving homicides with female victims when all other predictors are held constant. This odds ratio has a confidence interval of 0.324 to 0.558.
+According to this logistic regression model, this means that the male victims have 57.4% lower odds of having their homicide cases solved than female victims when all other predictors are held constant. This odds ratio has a confidence interval of 0.324 to 0.558. Since the confidence interval does not include 1, this difference is statistically signi
+ficant at the 0.05 level.
 
 Now, I will run `glm` for all the cities and extract their adjusted odds ratios.
 
@@ -111,8 +113,42 @@ city_results = homicide_df |>
   select(city_state, tidy_glm) |> 
   # expand the results by unnesting
   unnest(tidy_glm)
-  
-  
+
 ```
 
+Now, I will only extract the male vs female adjusted odds ratios and make a table of the results.
 
+```{r}
+OR_sex_by_city = city_results |> 
+  filter(term == "victim_sexMale") |> 
+  select(city_state, estimate, conf.low, conf.high) |> # ensuring the column stores actual ods ratios
+  mutate(
+    OR = exp(estimate),
+    lower_CI = exp(conf.low),
+    upper_CI = exp(conf.high)
+  ) |> 
+  select(-estimate, -conf.low, -conf.high)
+```
+
+Creating a plot of ORs by City, State.
+
+```{r, fig.width=12, fig.height=12}
+# plot the data
+ggplot(OR_sex_by_city, aes(
+  x = OR, 
+  y = fct_reorder(city_state, OR))
+  ) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = lower_CI, xmax = higher_CI)) +
+  labs(
+    x = "Adjusted Odds Ratio (Male vs Female)",
+    y = "City, State",
+    title = "Adjusted Odds Ratio of Solved Homicide Cases by Sex and City ",
+    caption = "Error bars show 95% confidence levels from glm function"
+  )
+
+```
+
+Albuquerque, NM has the greatest adjusted odds ratio of male homicide cases solved vs female homicide cases solved, followed by Stockton, California and Fresno, California. Although, it is hard to say these odds ratios are significant because all of their error bars include .
+
+In New York, NY, the adjusted odds ratio for males vs female homicide cases being solved is 1.34, meaning that male victims have 34% 
