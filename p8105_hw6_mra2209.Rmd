@@ -28,9 +28,11 @@ options(
 
 scale_colour_discrete = scale_colour_viridis_d
 scale_fill_discrete = scale_fill_viridis_d
+
+set.seed(123)
 ```
 
-# Problem 1
+# Problem 1: Taking a closer look at the Washington Post homicide data.
 
 First, I'll load and tidy the homicide data.
 ```{r}
@@ -139,7 +141,7 @@ ggplot(OR_sex_by_city, aes(
   y = fct_reorder(city_state, OR))
   ) +
   geom_point() +
-  geom_errorbarh(aes(xmin = lower_CI, xmax = higher_CI)) +
+  geom_errorbarh(aes(xmin = lower_CI, xmax = upper_CI)) +
   labs(
     x = "Adjusted Odds Ratio (Male vs Female)",
     y = "City, State",
@@ -149,6 +151,89 @@ ggplot(OR_sex_by_city, aes(
 
 ```
 
-Albuquerque, NM has the greatest adjusted odds ratio of male homicide cases solved vs female homicide cases solved, followed by Stockton, California and Fresno, California. Although, it is hard to say these odds ratios are significant because all of their error bars include .
+Albuquerque, NM has the greatest adjusted odds ratio of male homicide cases solved vs female homicide cases solved, followed by Stockton, California and Fresno, California. Male homicide victims in Albuquerque, NM have 1.76 times the odds of having their case solved compared to female victims, according to this model. Although, I cannot conclude that the true odds truly differ between males and females because the confidence interval includes 1. These three cities also happen to have the largest confidence intervals.
 
-In New York, NY, the adjusted odds ratio for males vs female homicide cases being solved is 1.34, meaning that male victims have 34% 
+The three cities with the greatest adjusted odds ratios of female homicides solved vs male homicide cases solved is New York, NY, Baton Rouge, LA, and Omaha, NE, respectively. In New York, NY, the odds of solving homicides involving male victims are 74% lower than those involving female victims, according to this model. The confidence interval's for these three cities do not include 1, and can be seen as statistically significant. 
+
+# Problem 2: Bootstrapping in Central Park!
+
+Importing the data.
+```{r}
+library(p8105.datasets)
+data("weather_df")
+```
+
+Let's write our simple linear regression function.
+
+```{r}
+weather_lm = lm(tmax ~ tmin + prcp, data = weather_df)
+summary(weather_lm)
+```
+
+Now I am going to refit the model 5,000 times, and resample the data with replacement each time, extracting the key quantities. 
+
+```{r}
+boot_results = map_dfr(1:5000, function(i) {
+  
+  boot_sample = weather_df[sample(nrow(weather_df), replace = TRUE),]
+  
+  fit = lm(tmax ~ tmin + prcp, data = boot_sample)
+  
+  tidy_fit = tidy(fit)
+  glance_fit = glance(fit)
+  
+  tibble(
+    r2 = glance_fit$r.squared,
+    beta1 = tidy_fit$estimate[tidy_fit$term == "tmin"],
+    beta2 = tidy_fit$estimate[tidy_fit$term == "prcp"],
+  )
+})
+
+boot_results
+```
+
+I will plot the distributions of the estimates.
+
+```{r}
+
+# plotting beta1
+ggplot(boot_results, aes(x = beta1)) +
+ geom_histogram(bins = 40, fill = "darkblue", color = "blue") +
+  labs(
+    title = "Boostrap Distributions of Beta1 (tmin)",
+    x = "Beta1 (tmin coefficient)",
+    y = "Frequency"
+  )
+ 
+# plotting beta2
+ggplot(boot_results, aes(x = beta2)) +
+ geom_histogram(bins = 40, fill = "darkblue", color = "blue") +
+  labs(
+    title = "Boostrap Distributions of Beta2 (prcp)",
+    x = "Beta2 (prcp coefficient)",
+    y = "Frequency"
+  )
+
+# plotting R^2
+ggplot(boot_results, aes(x = r2)) +
+ geom_histogram(bins = 40, fill = "darkblue", color = "blue") +
+  labs(
+    title = "Boostrap Distributions of R Squared",
+    x = "R Squared",
+    y = "Frequency"
+  )
+
+```
+
+The distribution of Beta1 is roughly normally distributed and is centered around 1.015, which is close to the original estimate of the tmin coefficient in my `weather_lm` linear regression model. The distribution of Beta2 is also roughly normally distributed and is centered around -0.006, which is also close to my original estimate of the prcp coefficient in my `weather_lm` linear regression model. This suggests that the model is relatively stable. The distribution of R Squared is more left skewed, indicating that in some bootstrap samples the model explained less variance than the original estimate. Although, the width of the distribution was narrow and was centered around 0.950, indicating that the linear model explains approximately 95% of the variance in tmax across bootstrap samples.
+
+# Problem 3: Regression modeling for child birthweight
+
+Loading and tidying the data.
+
+```{r}
+
+```
+
+
+
