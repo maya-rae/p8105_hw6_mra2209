@@ -10,6 +10,11 @@ library(tidyverse)
 library(broom)
 library(dplyr)
 library(forcats)
+library(car)
+library(MASS)
+library(modelr)
+library(purrr)
+library(glmnet)
 
 knitr::opts_chunk$set(
   echo = TRUE,
@@ -62,7 +67,7 @@ homicide_df = homicide_df |>
   ) 
 
 homicide_df = homicide_df |> 
-  select(-city, -state) |> 
+  dplyr::select(-city, -state) |> 
   filter(
     !city_state %in% c("Phoenix, AZ", "Kansas City, MO", "Dallas, TX", "Tulsa, AL")
   )
@@ -90,7 +95,7 @@ tidy_glm =
 
 tidy_glm |> 
   filter(term == "victim_sexMale") |> 
-  select(term, estimate, conf.low, conf.high)
+  dplyr::select(term, estimate, conf.low, conf.high)
 
 ```
 
@@ -112,7 +117,7 @@ city_results = homicide_df |>
       )),
     tidy_glm = map(glm_model, ~tidy(.x, conf.int = TRUE, exponenitate = TRUE))
   ) |> 
-  select(city_state, tidy_glm) |> 
+  dplyr::select(city_state, tidy_glm) |> 
   # expand the results by unnesting
   unnest(tidy_glm)
 
@@ -123,13 +128,13 @@ Now, I will only extract the male vs female adjusted odds ratios and make a tabl
 ```{r}
 OR_sex_by_city = city_results |> 
   filter(term == "victim_sexMale") |> 
-  select(city_state, estimate, conf.low, conf.high) |> # ensuring the column stores actual ods ratios
+  dplyr::select(city_state, estimate, conf.low, conf.high) |> # ensuring the column stores actual ods ratios
   mutate(
     OR = exp(estimate),
     lower_CI = exp(conf.low),
     upper_CI = exp(conf.high)
   ) |> 
-  select(-estimate, -conf.low, -conf.high)
+  dplyr::select(-estimate, -conf.low, -conf.high)
 ```
 
 Creating a plot of ORs by City, State.
@@ -229,11 +234,230 @@ The distribution of Beta1 is roughly normally distributed and is centered around
 
 # Problem 3: Regression modeling for child birthweight
 
-Loading and tidying the data.
+First, I will load and tidy the birtweight dataset.
 
 ```{r}
+birthweight_df = 
+  read_csv("./data/birthweight.csv") |> 
+  janitor::clean_names()
+```
 
+Right now, all variables are numeric, but `babysex` `frace` `mrace` and `malform` should be turned into factors. 
+
+```{r}
+birthweight_df = birthweight_df |> 
+  mutate(
+    babysex = factor(babysex, labels = c("Male", "Female")),
+    frace   = factor(frace,
+                     levels = c(1, 2, 3, 4, 8, 9),
+                     labels = c("White", "Black", "Asian", "Puerto Rican",
+                                "Other", "Unknown")), 
+    mrace   = factor(mrace,
+                     levels = c(1, 2, 3, 4, 8),
+                     labels = c("White", "Black", "Asian", "Puerto Rican",
+                                "Other")),
+    malform = factor(malform, labels = c("absent", "present"))
+  )
+
+birthweight_df = birthweight_df |> 
+  # removing variables that have colinearity
+  dplyr::select(-delwt, -ppbmi, -pnumlbw, -pnumsga) |> 
+  # drop unused levels/collapse small categories
+  mutate(
+    frace = fct_drop(frace), 
+    mrace = fct_drop(mrace)
+  ) 
+```
+
+I will propose a regression model for birthweight.
+
+I am going to fit a full model first and check for multicollinearity.
+
+```{r}
+full_model = lm(bwt ~ . , data = birthweight_df)
+summary(full_model)
+
+# double checking any variables that are perfectly collinear with other predictors
+alias(lm(bwt ~ ., data = birthweight_df))
+
+# checking multicollinearity
+vif(full_model)
+```
+
+Now I can see the potential significant predictors for my model. When using `vif()` to assess multicollinearity, most variables have a GVIF^(1/(2*Df)) value between 1 and 3 signifying mild to low correlation. `frace` and `mrace` have the highest GVIF^(1/(2Df)) value, but this is not critical, but is something to note when interpreting these race coefficients in my model.
+
+I am going to use AIC-based stepwise selection to interpret the coefficients because the multicollinerity is not severe and this method will work efficiently for this size and number of predictors.
+
+```{r}
+step_model = stepAIC(
+  full_model, 
+  direction = "both", # this allows variables to both enter or leave
+  trace = TRUE       # so I can clearly see the stepwise process
+)
+
+summary(step_model)
+
+# check multicollinearity again
+vif(step_model)
+```
+
+This stepwise selected model has an R squared value of 0.7173, meaning that 72% of the variance in birthweight can be explained by these predictors, accounting for the number of predictors. The low F-statistic also tells us that the model as a whole is highly significant. The strongest effects on birthweight are baby size measurements (`bhead` and `blength`), maternal measurements and behaviors (`wtgain` and `smoken`), maternal race (particularly `mraceBlack` and `mracePuerto Rican`), and gestational age (`gaweeks`).
+
+Now, I will check the model diagnostics.
+
+```{r}
+par(mfrow = c(2, 2))
+plot(step_model)
+
+stepwise_formula = formula(step_model)
 ```
 
 
+I am going to plot the residuals vs fitted values using `add_predictions()` and `add_residuals()`.
 
+```{r}
+# adding predictions and residuals to df
+birthweight_df2 = birthweight_df |> 
+  add_predictions(step_model, var = "predicted_bwt") |> 
+  add_residuals(step_model, var = "residuals")
+
+# plotting residuals vs fitted values
+ggplot(birthweight_df2, aes(x = predicted_bwt, y = residuals)) +
+  geom_point(alpha = 0.5) +
+  geom_hline(yintercept = 0, color = "blue", linetype = "dashed") +
+  labs(
+    x = "Fitted values (predicted birthweight)",
+    y = "Resdiuals",
+    title = "Residuals vs Fitted Values",
+    caption = "Blue dashed line = perfect prediction"
+  )
+```
+
+A good residual plot should have residuals that are randomly scattered around 0 with no systematic pattern. The residuals in this plot are not perfectly randomly scattered and the variance of residuals seems a bit smaller for lower fitted values and larger for higher fitted values. There are also a couple of outliers at the lower predicted birthweights. Overall, most residuals are close to zero and captures the central trend reasonably well, but may be violating the constant variance assumption.
+
+Now, I will compare my model to two others.
+
+```{r}
+# first model for comparison (simple main effects)
+main_effects_formula = bwt ~ blength + gaweeks
+
+# second model for comparison (with all interactions)
+interactions_formula = bwt ~ (bhead + blength + babysex)^3
+
+```
+
+I will use `crossv_mc()` to create cross-validation splits. Then, I will compute the prediction errors.
+
+```{r}
+cv_df = 
+  crossv_mc(birthweight_df, 50) |> 
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble)
+  )
+
+cv_rmse <- function(train, test, formula) {
+  # fit model safely
+  model <- tryCatch(lm(formula, data = train), error = function(e) NULL)
+  if(is.null(model)) return(NA_real_)
+  
+  # align factor levels in test
+  for(col in names(test)) {
+    if(is.factor(train[[col]])) {
+      test[[col]] <- factor(test[[col]], levels = levels(train[[col]]))
+    }
+  }
+  
+  # predict safely
+  preds <- tryCatch(predict(model, newdata = test),
+                    error = function(e) rep(NA_real_, nrow(test)))
+  
+  valid <- !is.na(preds) & !is.na(test$bwt)
+  if(sum(valid) == 0) return(NA_real_)
+  
+  sqrt(mean((test$bwt[valid] - preds[valid])^2))
+}
+
+
+# fitting the models to training data
+cv_df = cv_df |> 
+  mutate(
+    stepwise_mod    = map(train, \(df) lm(stepwise_formula, data = df)),
+    main_effects_mod = map(train, \(df) lm(bwt ~ blength + gaweeks, data = df)),
+    interactions_mod = map(train, \(df) lm(bwt ~ (bhead + blength + babysex)^3, data = df))
+  ) |> 
+  mutate(
+    # compute RMSE on test splits
+    rmse_stepwise     = map2_dbl(stepwise_mod, test, \(mod, df) {
+      df <- df |> mutate(across(where(is.factor), ~factor(.x, levels = levels(df))))
+      sqrt(mean((df$bwt - predict(mod, newdata = df))^2))
+    }),
+    rmse_main_effects = map2_dbl(main_effects_mod, test, \(mod, df) {
+      df <- df |> mutate(across(where(is.factor), ~factor(.x, levels = levels(df))))
+      sqrt(mean((df$bwt - predict(mod, newdata = df))^2))
+    }),
+    rmse_interactions = map2_dbl(interactions_mod, test, \(mod, df) {
+      df <- df |> mutate(across(where(is.factor), ~factor(.x, levels = levels(df))))
+      sqrt(mean((df$bwt - predict(mod, newdata = df))^2))
+    })
+  )
+```
+
+I will summarize the results in this ggplot. I am confused as to why I cannot compute the RMSE for my stepwise and interactions models using this workflow. I tried to exclude Na values and align the factor levels, but nothing worked. I can only see the main_effects data in my plot below.
+
+```{r}
+cv_df |> 
+  dplyr::select(starts_with("rmse")) |> 
+  pivot_longer(
+    everything(),
+    names_to = "model", 
+    values_to = "rmse",
+    names_prefix = "rmse_") |> 
+  mutate(model = fct_inorder(model)) |> 
+  ggplot(aes(x = model, y = rmse)) + geom_violin()
+
+```
+
+I will use ridge regression cross-validation to compare the three models and compute their RMSEs.
+
+```{r}
+# prepare design matrices
+
+# stepwise model
+stepwise_formula = bwt ~ babysex + bhead + blength + fincome + gaweeks + 
+                    mheight + mrace + parity + ppwt + smoken + wtgain
+x_stepwise = model.matrix(stepwise_formula, data = birthweight_df)[,-1]
+
+# main effects model
+main_effects_formula = bwt ~ blength + gaweeks
+x_main = model.matrix(main_effects_formula, data = birthweight_df)[,-1]
+
+# interactionsmodel
+interactions_formula = bwt ~ (bhead + blength + babysex)^3
+x_inter = model.matrix(interactions_formula, data = birthweight_df)[,-1]
+
+# Response
+y = birthweight_df$bwt
+
+cv_ridge_rmse = function(x, y, nfolds = 10) {
+  set.seed(123)
+  cvfit = cv.glmnet(x, y, alpha = 0, nfolds = nfolds)
+  # predict on full data using lambda.min
+  preds = predict(cvfit, newx = x, s = "lambda.min")
+  sqrt(mean((y - preds)^2))
+}
+
+rmse_values = tibble(
+  model = c("stepwise", "main_effects", "interactions"),
+  rmse  = c(
+    cv_ridge_rmse(x_stepwise, y),
+    cv_ridge_rmse(x_main, y),
+    cv_ridge_rmse(x_inter, y)
+  )
+)
+
+print(rmse_values)
+
+```
+
+My stepwise model has the lowest RMSE value of 272, meaning, on average, the predictions are off by about 272 grams from the true birthweight. Out of these models, the stepwise one has the best predictive accuracy. It is also the model with the highest adjusted R squared value.
